@@ -80,21 +80,21 @@ public class StackConstants {
 	/**
 	 * The bucket containing all table row data.
 	 */
-	public static final String TABLE_ROW_CHANGE_BUCKET = "%1$s.table.row.changes";
+	public static final String TABLE_ROW_CHANGE_BUCKET = "%1$s.table.row.changes.pfh.org";
 	
 	/**
 	 * The bucket containing all participant data.
 	 */
-	public static final String PARTICIPANT_DATA_BUCKET = "%1$s.ptdata";
+	public static final String PARTICIPANT_DATA_BUCKET = "%1$s.ptdata.pfh.org";
 
 	/**
 	 * The bucket containing all access record data.
 	 */
-	public static final String ACCESS_RECORD_BUCKET = "%1$s.access.record.sagebase.org";
+	public static final String ACCESS_RECORD_BUCKET = "%1$s.access.record.pfh.org";
 	
 	/**
 	 * The bucket containing all access record data.
 	 */
-	public static final String STACK_LOG_BUCKET = "%1$s.log.sagebase.org";
+	public static final String STACK_LOG_BUCKET = "%1$s.log.pfh.org";
 
 }
