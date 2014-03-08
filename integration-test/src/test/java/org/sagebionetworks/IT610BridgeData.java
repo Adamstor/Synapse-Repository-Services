@@ -1,18 +1,19 @@
 package org.sagebionetworks;
 
-import static org.junit.Assert.*;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 
 import java.sql.Date;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-import org.apache.commons.lang.builder.ToStringBuilder;
 import org.junit.After;
 import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.BeforeClass;
-import org.junit.Ignore;
 import org.junit.Test;
 import org.sagebionetworks.bridge.model.data.ParticipantDataColumnDescriptor;
 import org.sagebionetworks.bridge.model.data.ParticipantDataColumnType;
@@ -25,12 +26,12 @@ import org.sagebionetworks.bridge.model.data.ParticipantDataStatus;
 import org.sagebionetworks.bridge.model.data.ParticipantDataStatusList;
 import org.sagebionetworks.bridge.model.data.value.ParticipantDataDatetimeValue;
 import org.sagebionetworks.bridge.model.data.value.ParticipantDataDoubleValue;
+import org.sagebionetworks.bridge.model.data.value.ParticipantDataEventValue;
 import org.sagebionetworks.bridge.model.data.value.ParticipantDataLongValue;
 import org.sagebionetworks.bridge.model.data.value.ParticipantDataStringValue;
 import org.sagebionetworks.bridge.model.data.value.ParticipantDataValue;
-import org.sagebionetworks.bridge.model.data.value.ValueTranslator;
-import org.sagebionetworks.bridge.model.timeseries.TimeSeries;
-import org.sagebionetworks.bridge.model.timeseries.TimeSeriesCollection;
+import org.sagebionetworks.bridge.model.data.value.ValueFactory;
+import org.sagebionetworks.bridge.model.timeseries.TimeSeriesTable;
 import org.sagebionetworks.bridge.model.versionInfo.BridgeVersionInfo;
 import org.sagebionetworks.client.BridgeClient;
 import org.sagebionetworks.client.BridgeClientImpl;
@@ -41,8 +42,8 @@ import org.sagebionetworks.client.SynapseClient;
 import org.sagebionetworks.client.SynapseClientImpl;
 import org.sagebionetworks.client.exceptions.SynapseException;
 import org.sagebionetworks.client.exceptions.SynapseNotFoundException;
-import org.sagebionetworks.repo.model.PaginatedResults;
 import org.sagebionetworks.repo.model.IdList;
+import org.sagebionetworks.repo.model.PaginatedResults;
 
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
@@ -74,12 +75,6 @@ public class IT610BridgeData {
 
 		// Return a proxy
 		return BridgeProfileProxy.createProfileProxy(bridge);
-	}
-
-	private static SynapseClient createSynapse(BridgeClient bridge) {
-		SynapseClient synapse = new SynapseClientImpl(bridge);
-		SynapseClientHelper.setEndpoints(synapse);
-		return synapse;
 	}
 
 	@BeforeClass
@@ -134,7 +129,7 @@ public class IT610BridgeData {
 	 */
 	@Test
 	public void testCreateAndDeleteParticipantData() throws Exception {
-		ParticipantDataDescriptor participantDataDescriptor = createDescriptor();
+		ParticipantDataDescriptor participantDataDescriptor = createDescriptor(false);
 
 		createColumnDescriptor(participantDataDescriptor, "level", ParticipantDataColumnType.STRING);
 		createColumnDescriptor(participantDataDescriptor, "size", ParticipantDataColumnType.STRING);
@@ -161,7 +156,7 @@ public class IT610BridgeData {
 
 	@Test
 	public void testPaginatedParticipantData() throws Exception {
-		ParticipantDataDescriptor participantDataDescriptor = createDescriptor();
+		ParticipantDataDescriptor participantDataDescriptor = createDescriptor(false);
 
 		createColumnDescriptor(participantDataDescriptor, "level", ParticipantDataColumnType.STRING);
 		createColumnDescriptor(participantDataDescriptor, "size", ParticipantDataColumnType.STRING);
@@ -188,7 +183,7 @@ public class IT610BridgeData {
 
 	@Test
 	public void testReplaceParticipantData() throws Exception {
-		ParticipantDataDescriptor participantDataDescriptor = createDescriptor();
+		ParticipantDataDescriptor participantDataDescriptor = createDescriptor(false);
 
 		createColumnDescriptor(participantDataDescriptor, "level", ParticipantDataColumnType.STRING);
 		createColumnDescriptor(participantDataDescriptor, "size", ParticipantDataColumnType.STRING);
@@ -211,7 +206,7 @@ public class IT610BridgeData {
 
 	@Test
 	public void testGetCurrentParticipantData() throws Exception {
-		ParticipantDataDescriptor participantDataDescriptor = createDescriptor();
+		ParticipantDataDescriptor participantDataDescriptor = createDescriptor(false);
 
 		createColumnDescriptor(participantDataDescriptor, "level", ParticipantDataColumnType.STRING);
 		createColumnDescriptor(participantDataDescriptor, "size", ParticipantDataColumnType.STRING);
@@ -265,7 +260,7 @@ public class IT610BridgeData {
 
 	@Test
 	public void testDeleteParticipantDataRows() throws Exception {
-		ParticipantDataDescriptor participantDataDescriptor = createDescriptor();
+		ParticipantDataDescriptor participantDataDescriptor = createDescriptor(false);
 
 		createColumnDescriptor(participantDataDescriptor, "level", ParticipantDataColumnType.STRING);
 
@@ -287,8 +282,67 @@ public class IT610BridgeData {
 	}
 
 	@Test
+	public void testGetCurrentRows() throws Exception {
+		ParticipantDataDescriptor participantDataDescriptor = createDescriptor(true);
+
+		createColumnDescriptor(participantDataDescriptor, "event", ParticipantDataColumnType.EVENT);
+		createColumnDescriptor(participantDataDescriptor, "level", ParticipantDataColumnType.DOUBLE);
+
+		String[] headers = { "event", "level" };
+
+		List<ParticipantDataRow> data1 = createRows(headers, null, ValueFactory.createEventValue(30000L, null, "a", null), 1.0, null,
+				ValueFactory.createEventValue(40000L, 50000L, "b", null), 2.0, null, ValueFactory.createEventValue(20000L, null, "c", null),
+				3.0);
+		data1 = bridge.appendParticipantData(participantDataDescriptor.getId(), data1);
+
+		List<ParticipantDataRow> currentRows = bridge.getCurrentRows(participantDataDescriptor.getId());
+		assertEquals(2, currentRows.size());
+		assertEquals(20000L, getEvent(currentRows, 0, "event").getStart().longValue());
+		assertEquals(30000L, getEvent(currentRows, 1, "event").getStart().longValue());
+	}
+
+	@Test
+	public void testGetHistoryRows() throws Exception {
+		ParticipantDataDescriptor participantDataDescriptor = createDescriptor(true);
+
+		createColumnDescriptor(participantDataDescriptor, "event", ParticipantDataColumnType.EVENT);
+		createColumnDescriptor(participantDataDescriptor, "level", ParticipantDataColumnType.DOUBLE);
+
+		String[] headers = { "event", "level" };
+
+		List<ParticipantDataRow> data1 = createRows(headers, null, ValueFactory.createEventValue(40000L, null, "a", null), 1.0, null,
+				ValueFactory.createEventValue(30000L, 40000L, "b", null), 2.0, null,
+				ValueFactory.createEventValue(20000L, 30000L, "c", null), 3.0);
+		data1 = bridge.appendParticipantData(participantDataDescriptor.getId(), data1);
+
+		List<ParticipantDataRow> currentRows = bridge.getHistoryRows(participantDataDescriptor.getId(), null, null);
+		assertEquals(3,  currentRows.size());
+		assertEquals(20000L, getEvent(currentRows, 0, "event").getStart().longValue());
+		assertEquals(30000L, getEvent(currentRows, 1, "event").getStart().longValue());
+		assertEquals(40000L, getEvent(currentRows, 2, "event").getStart().longValue());
+
+		currentRows = bridge.getHistoryRows(participantDataDescriptor.getId(), new Date(30000L), null);
+		assertEquals(2, currentRows.size());
+		assertEquals(30000L, getEvent(currentRows, 0, "event").getStart().longValue());
+		assertEquals(40000L, getEvent(currentRows, 1, "event").getStart().longValue());
+
+		currentRows = bridge.getHistoryRows(participantDataDescriptor.getId(), null, new Date(35000L));
+		assertEquals(2, currentRows.size());
+		assertEquals(20000L, getEvent(currentRows, 0, "event").getStart().longValue());
+		assertEquals(30000L, getEvent(currentRows, 1, "event").getStart().longValue());
+
+		currentRows = bridge.getHistoryRows(participantDataDescriptor.getId(), new Date(25000L), new Date(35000L));
+		assertEquals(1, currentRows.size());
+		assertEquals(30000L, getEvent(currentRows, 0, "event").getStart().longValue());
+	}
+
+	private ParticipantDataEventValue getEvent(List<ParticipantDataRow> rows, int index, String column) {
+		return ((ParticipantDataEventValue) rows.get(index).getData().get(column));
+	}
+
+	@Test
 	public void testGetTimeSeries() throws Exception {
-		ParticipantDataDescriptor participantDataDescriptor = createDescriptor();
+		ParticipantDataDescriptor participantDataDescriptor = createDescriptor(false);
 
 		createColumnDescriptor(participantDataDescriptor, "date", ParticipantDataColumnType.DATETIME);
 		createColumnDescriptor(participantDataDescriptor, "level", ParticipantDataColumnType.DOUBLE);
@@ -306,47 +360,89 @@ public class IT610BridgeData {
 				new Date(30000), 7.7, 200L);
 		data1 = bridge.appendParticipantData(participantDataDescriptor.getId(), data1);
 
-		TimeSeriesCollection timeSeries = bridge.getTimeSeries(participantDataDescriptor.getId(), null);
-		assertEquals(2, timeSeries.getSeries().size());
-
-		TimeSeries level = timeSeries.getSeries().get(0);
-		TimeSeries size = timeSeries.getSeries().get(1);
-		if (timeSeries.getSeries().get(0).getName().equals("size")) {
-			level = timeSeries.getSeries().get(1);
-			size = timeSeries.getSeries().get(0);
+		TimeSeriesTable timeSeries = bridge.getTimeSeries(participantDataDescriptor.getId(), null);
+		assertEquals(3, timeSeries.getColumns().size());
+		assertEquals(3, timeSeries.getRows().size());
+		assertEquals(0, timeSeries.getEvents().size());
+		assertEquals(3, timeSeries.getRows().get(0).getValues().size());
+		assertEquals(3, timeSeries.getRows().get(1).getValues().size());
+		assertEquals(3, timeSeries.getRows().get(2).getValues().size());
+		assertEquals(0, timeSeries.getDateIndex().intValue());
+		int levelIndex = 1;
+		int sizeIndex = 2;
+		if (timeSeries.getColumns().get(1).equals("size")) {
+			levelIndex = 2;
+			sizeIndex = 1;
 		}
-		assertEquals(2, size.getSeries().size());
-		assertEquals(3, level.getSeries().size());
-		assertEquals(new Date(30000).getTime(), size.getSeries().get(1).getDate().longValue());
-		assertEquals(new Date(30000).getTime(), level.getSeries().get(2).getDate().longValue());
-		assertEquals(200.0, size.getSeries().get(1).getValue().doubleValue(), 0.001);
-		assertEquals(7.7, level.getSeries().get(2).getValue().doubleValue(), 0.001);
 
-		TimeSeriesCollection level2 = bridge.getTimeSeries(participantDataDescriptor.getId(), Lists.newArrayList("level"));
-		assertEquals(1, level2.getSeries().size());
-		assertEquals(level, level2.getSeries().get(0));
+		assertEquals(new Date(30000).getTime(),
+				Long.parseLong(timeSeries.getRows().get(2).getValues().get(timeSeries.getDateIndex().intValue())));
+		assertEquals(7.7, Double.parseDouble(timeSeries.getRows().get(2).getValues().get(levelIndex)), 0.0001);
+		assertEquals(200.0, Double.parseDouble(timeSeries.getRows().get(2).getValues().get(sizeIndex)), 0.0001);
+		assertNull(timeSeries.getRows().get(1).getValues().get(sizeIndex));
 
-		TimeSeriesCollection size2 = bridge.getTimeSeries(participantDataDescriptor.getId(), Lists.newArrayList("size"));
-		assertEquals(1, size2.getSeries().size());
-		assertEquals(size, size2.getSeries().get(0));
+		TimeSeriesTable level = bridge.getTimeSeries(participantDataDescriptor.getId(), Lists.newArrayList("level"));
+		assertEquals(2, level.getColumns().size());
+		assertEquals(3, level.getRows().size());
+		assertEquals(2, level.getRows().get(0).getValues().size());
+		assertEquals(2, level.getRows().get(1).getValues().size());
+		assertEquals(2, level.getRows().get(2).getValues().size());
+		assertEquals(0, level.getDateIndex().intValue());
+		assertEquals(7.7, Double.parseDouble(level.getRows().get(2).getValues().get(1)), 0.0001);
 
-		TimeSeriesCollection levelSize = bridge.getTimeSeries(participantDataDescriptor.getId(), Lists.newArrayList("level", "size"));
-		assertEquals(2, levelSize.getSeries().size());
-		TimeSeries level2s = levelSize.getSeries().get(0);
-		TimeSeries size2s = levelSize.getSeries().get(1);
-		if (levelSize.getSeries().get(0).getName().equals("size")) {
-			level2s = levelSize.getSeries().get(1);
-			size2s = levelSize.getSeries().get(0);
-		}
-		assertEquals(size, size2s);
-		assertEquals(level, level2s);
+		TimeSeriesTable size = bridge.getTimeSeries(participantDataDescriptor.getId(), Lists.newArrayList("size"));
+		assertEquals(2, size.getColumns().size());
+		assertEquals(3, size.getRows().size());
+		assertEquals(2, size.getRows().get(0).getValues().size());
+		assertEquals(2, size.getRows().get(1).getValues().size());
+		assertEquals(2, size.getRows().get(2).getValues().size());
+		assertEquals(0, size.getDateIndex().intValue());
+		assertEquals(200.0, Double.parseDouble(size.getRows().get(2).getValues().get(1)), 0.0001);
+
+		TimeSeriesTable namedColumns = bridge.getTimeSeries(participantDataDescriptor.getId(), Lists.newArrayList("level", "size"));
+		assertEquals(timeSeries, namedColumns);
 	}
 	
+	@Test
+	public void testGetEventTimeSeries() throws Exception {
+		ParticipantDataDescriptor participantDataDescriptor = createDescriptor(true);
+
+		createColumnDescriptor(participantDataDescriptor, "event", ParticipantDataColumnType.EVENT);
+		createColumnDescriptor(participantDataDescriptor, "level", ParticipantDataColumnType.DOUBLE);
+		createColumnDescriptor(participantDataDescriptor, "size", ParticipantDataColumnType.LONG);
+
+		String[] headers = { "event", "level", "size" };
+
+		ParticipantDataStatusList statuses = new ParticipantDataStatusList();
+		ParticipantDataStatus update = new ParticipantDataStatus();
+		update.setParticipantDataDescriptorId(participantDataDescriptor.getId());
+		List<ParticipantDataStatus> updates = Collections.singletonList(update);
+		statuses.setUpdates(updates);
+
+		List<ParticipantDataRow> data1 = createRows(headers, null, ValueFactory.createEventValue(50000L, 60000L, "a1", "aa"), 5.5, 400L,
+				null, ValueFactory.createEventValue(40000L, 50000L, "a2", "aa"), 5.5, 400L, null,
+				ValueFactory.createEventValue(10000L, 20000L, "b1", "bb"), 6.61, null, null,
+				ValueFactory.createEventValue(30000L, null, "b2", "bb"), 6.63, null, null,
+				ValueFactory.createEventValue(20000L, 30000L, "b2", "bb"), 6.62, null, null,
+				ValueFactory.createEventValue(20000L, 30000L, "c", null), 7.7, 200L, null,
+				ValueFactory.createEventValue(60000L, 30000L, "d", null), 8.8, 300L);
+		data1 = bridge.appendParticipantData(participantDataDescriptor.getId(), data1);
+
+		TimeSeriesTable timeSeries = bridge.getTimeSeries(participantDataDescriptor.getId(), null);
+		assertEquals(3, timeSeries.getColumns().size());
+		assertEquals(0, timeSeries.getRows().size());
+		assertEquals(4, timeSeries.getEvents().size());
+		assertEquals(ValueFactory.createEventValue(10000L, null, "b1", "bb"), timeSeries.getEvents().get(0));
+		assertEquals(ValueFactory.createEventValue(20000L, 30000L, "c", null), timeSeries.getEvents().get(1));
+		assertEquals(ValueFactory.createEventValue(40000L, 60000L, "a2", "aa"), timeSeries.getEvents().get(2));
+		assertEquals(ValueFactory.createEventValue(60000L, 30000L, "d", null), timeSeries.getEvents().get(3));
+	}
+
 	@Test
 	public void testGetParticipantDataDescriptorWithColumnsAndStatus() throws Exception {
 		java.util.Date lastPrompted = new java.util.Date();
 		
-		ParticipantDataDescriptor descriptor = createDescriptor();
+		ParticipantDataDescriptor descriptor = createDescriptor(false);
 
 		createColumnDescriptor(descriptor, "date", ParticipantDataColumnType.DATETIME);
 		createColumnDescriptor(descriptor, "level", ParticipantDataColumnType.DOUBLE);
@@ -385,11 +481,14 @@ public class IT610BridgeData {
 		bridge.createParticipantDataColumnDescriptor(participantDataColumnDescriptor1);
 	}
 
-	private ParticipantDataDescriptor createDescriptor() throws SynapseException {
+	private ParticipantDataDescriptor createDescriptor(boolean hasEvents) throws SynapseException {
 		ParticipantDataDescriptor participantDataDescriptor = new ParticipantDataDescriptor();
 		participantDataDescriptor.setName("my-first-participantData-" + System.currentTimeMillis());
 		participantDataDescriptor.setRepeatType(ParticipantDataRepeatType.ALWAYS);
 		participantDataDescriptor.setDatetimeStartColumnName("date");
+		if (hasEvents) {
+			participantDataDescriptor.setEventColumnName("event");
+		}
 		participantDataDescriptor = bridge.createParticipantDataDescriptor(participantDataDescriptor);
 		return participantDataDescriptor;
 	}
@@ -430,6 +529,9 @@ public class IT610BridgeData {
 			ParticipantDataStringValue result = new ParticipantDataStringValue();
 			result.setValue((String) value);
 			return result;
+		}
+		if (value instanceof ParticipantDataEventValue) {
+			return (ParticipantDataEventValue) value;
 		}
 		throw new IllegalArgumentException(value.getClass().getName());
 	}

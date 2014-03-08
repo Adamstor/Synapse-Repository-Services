@@ -15,7 +15,7 @@ import org.junit.Test;
 import org.sagebionetworks.client.SynapseAdminClient;
 import org.sagebionetworks.client.SynapseAdminClientImpl;
 import org.sagebionetworks.client.exceptions.SynapseException;
-import org.sagebionetworks.client.exceptions.SynapseServiceException;
+import org.sagebionetworks.client.exceptions.SynapseServerException;
 import org.sagebionetworks.repo.model.Entity;
 import org.sagebionetworks.repo.model.ObjectType;
 import org.sagebionetworks.repo.model.Project;
@@ -58,7 +58,7 @@ public class IT101Administration {
 	public void after() throws Exception {
 		if(adminSynapse != null && toDelete != null){
 			for(Entity e: toDelete){
-				adminSynapse.deleteAndPurgeEntity(e);
+				adminSynapse.deleteEntity(e, true);
 			}
 		}
 		// always restore the status
@@ -101,16 +101,17 @@ public class IT101Administration {
 		try{
 			adminSynapse.putEntity(project);
 			fail("Updating an entity in read only mode should have failed");
-		}catch(SynapseServiceException e){
+		}catch(SynapseServerException e){
 			assertTrue(e.getMessage().indexOf("Synapse is in READ_ONLY mode for maintenance") > -1);
+		} finally {
+			// put it back in read-write mode and try again
+			status.setStatus(StatusEnum.READ_WRITE);
+			status = adminSynapse.updateCurrentStackStatus(status);
+			assertEquals(StatusEnum.READ_WRITE, status.getStatus());
+			project = adminSynapse.putEntity(project);
+			assertNotNull(project);
+			assertEquals(newDescription, project.getDescription());
 		}
-		// put it back in read-write mode and try again
-		status.setStatus(StatusEnum.READ_WRITE);
-		status = adminSynapse.updateCurrentStackStatus(status);
-		assertEquals(StatusEnum.READ_WRITE, status.getStatus());
-		project = adminSynapse.putEntity(project);
-		assertNotNull(project);
-		assertEquals(newDescription, project.getDescription());
 	}
 	
 	@Test

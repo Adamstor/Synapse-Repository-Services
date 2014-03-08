@@ -41,20 +41,6 @@ public interface HttpClientProvider {
 	 * @throws IOException
 	 * @throws HttpClientHelperException
 	 */
-	public void uploadFile(String requestUrl, String filepath, String contentType,	Map<String, String> requestHeaders) throws ClientProtocolException, IOException, HttpClientHelperException;
-	
-	
-	/**
-	 * Upload a file.
-	 * 
-	 * @param requestUrl
-	 * @param filepath
-	 * @param contentType
-	 * @param requestHeaders
-	 * @throws ClientProtocolException
-	 * @throws IOException
-	 * @throws HttpClientHelperException
-	 */
 	public void putFile(String requestUrl, File toPut, Map<String, String> requestHeaders) throws ClientProtocolException, IOException, HttpClientHelperException;
 
 	/**
@@ -78,7 +64,7 @@ public interface HttpClientProvider {
 	 * @throws IOException
 	 * @throws HttpClientHelperException
 	 */
-	public HttpResponse performRequest(String string, String requestMethod,	String requestContent, Map<String, String> requestHeaders) throws ClientProtocolException, IOException, HttpClientHelperException;
+	public HttpResponse performRequest(String string, String requestMethod,	String requestContent, Map<String, String> requestHeaders) throws ClientProtocolException, IOException;
 	
 	/**
 	 * The strait pass through.

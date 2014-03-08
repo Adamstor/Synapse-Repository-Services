@@ -4,6 +4,7 @@ import java.io.UnsupportedEncodingException;
 import java.net.URLEncoder;
 
 import org.json.JSONObject;
+import org.sagebionetworks.client.exceptions.SynapseClientException;
 import org.sagebionetworks.client.exceptions.SynapseException;
 import org.sagebionetworks.repo.model.EntityId;
 import org.sagebionetworks.repo.model.ObjectType;
@@ -63,7 +64,7 @@ public class SynapseAdminClientImpl extends SynapseClientImpl implements Synapse
 	}
 	
 	public SynapseAdminClientImpl(HttpClientProvider clientProvider, DataUploader dataUploader) {
-		super(clientProvider, dataUploader);
+		super(new SharedClientConnection(clientProvider), dataUploader);
 	}
 	
 	/**
@@ -97,7 +98,7 @@ public class SynapseAdminClientImpl extends SynapseClientImpl implements Synapse
 			results.initializeFromJSONObject(adapter);
 			return results;
 		} catch (JSONObjectAdapterException e) {
-			throw new SynapseException(e);
+			throw new SynapseClientException(e);
 		}
 	}
 
@@ -155,7 +156,7 @@ public class SynapseAdminClientImpl extends SynapseClientImpl implements Synapse
 	public BackupRestoreStatus startBackup(MigrationType migrationType, IdList ids) throws JSONObjectAdapterException, SynapseException {
 		String uri = MIGRATION_BACKUP + "?type=" + migrationType.name();
 		String jsonStr = EntityFactory.createJSONStringForEntity(ids);
-		JSONObject jsonObj = getSharedClientConnection().postJson(repoEndpoint, uri, jsonStr, getUserAgent());
+		JSONObject jsonObj = getSharedClientConnection().postJson(repoEndpoint, uri, jsonStr, getUserAgent(), null);
 		JSONObjectAdapter adapter = new JSONObjectAdapterImpl(jsonObj);
 		BackupRestoreStatus brStatus = new BackupRestoreStatus();
 		brStatus.initializeFromJSONObject(adapter);
@@ -165,7 +166,7 @@ public class SynapseAdminClientImpl extends SynapseClientImpl implements Synapse
 	public BackupRestoreStatus startRestore(MigrationType migrationType, RestoreSubmission req) throws JSONObjectAdapterException, SynapseException {
 		String uri = MIGRATION_RESTORE + "?type=" + migrationType.name();
 		String jsonStr = EntityFactory.createJSONStringForEntity(req);
-		JSONObject jsonObj = getSharedClientConnection().postJson(repoEndpoint, uri, jsonStr, getUserAgent());
+		JSONObject jsonObj = getSharedClientConnection().postJson(repoEndpoint, uri, jsonStr, getUserAgent(), null);
 		JSONObjectAdapter adapter = new JSONObjectAdapterImpl(jsonObj);
 		BackupRestoreStatus brStatus = new BackupRestoreStatus();
 		brStatus.initializeFromJSONObject(adapter);
@@ -244,7 +245,7 @@ public class SynapseAdminClientImpl extends SynapseClientImpl implements Synapse
 	public PublishResults publishChangeMessages(String queueName, Long startChangeNumber, ObjectType type, Long limit) throws SynapseException, JSONObjectAdapterException{
 		// Build up the URL
 		String url = buildPublishMessagesURL(queueName, startChangeNumber, type, limit);
-		JSONObject json = getSharedClientConnection().postJson(repoEndpoint, url, null, getUserAgent());
+		JSONObject json = getSharedClientConnection().postJson(repoEndpoint, url, null, getUserAgent(), null);
 		return EntityFactory.createEntityFromJSONObject(json, PublishResults.class);
 	}
 	
@@ -297,7 +298,7 @@ public class SynapseAdminClientImpl extends SynapseClientImpl implements Synapse
 			uri += "&rangeKeyName=" + URLEncoder.encode(rangeKeyName, "UTF-8");
 			getSharedClientConnection().deleteUri(repoEndpoint, uri, getUserAgent());
 		} catch (UnsupportedEncodingException e) {
-			throw new SynapseException(e);
+			throw new SynapseClientException(e);
 		}
 	}
 
@@ -306,7 +307,7 @@ public class SynapseAdminClientImpl extends SynapseClientImpl implements Synapse
 		if(user.getEmail() == null) throw new IllegalArgumentException("New users must have an email");
 		if(user.getUsername() == null) throw new IllegalArgumentException("New users must have a username");
 		JSONObject json = getSharedClientConnection().postJson(repoEndpoint, ADMIN_USER,
-				EntityFactory.createJSONStringForEntity(user), getUserAgent());
+				EntityFactory.createJSONStringForEntity(user), getUserAgent(), null);
 		
 		EntityId id = EntityFactory.createEntityFromJSONObject(json, EntityId.class);
 		return Long.parseLong(id.getId());

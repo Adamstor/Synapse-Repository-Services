@@ -3,12 +3,13 @@ package org.sagebionetworks.bridge.manager.participantdata;
 import java.io.IOException;
 import java.security.GeneralSecurityException;
 import java.util.Collections;
+import java.util.Comparator;
+import java.util.Date;
+import java.util.Iterator;
 import java.util.List;
 import java.util.ListIterator;
-import java.util.Set;
 
 import org.apache.commons.lang.BooleanUtils;
-import org.apache.commons.lang.StringUtils;
 import org.sagebionetworks.bridge.model.ParticipantDataDAO;
 import org.sagebionetworks.bridge.model.ParticipantDataId;
 import org.sagebionetworks.bridge.model.ParticipantDataStatusDAO;
@@ -18,11 +19,12 @@ import org.sagebionetworks.bridge.model.data.ParticipantDataDescriptor;
 import org.sagebionetworks.bridge.model.data.ParticipantDataRow;
 import org.sagebionetworks.bridge.model.data.ParticipantDataStatus;
 import org.sagebionetworks.bridge.model.data.value.ParticipantDataDatetimeValue;
+import org.sagebionetworks.bridge.model.data.value.ParticipantDataEventValue;
 import org.sagebionetworks.bridge.model.data.value.ParticipantDataValue;
+import org.sagebionetworks.bridge.model.data.value.ValueFactory;
 import org.sagebionetworks.bridge.model.data.value.ValueTranslator;
-import org.sagebionetworks.bridge.model.timeseries.TimeSeries;
-import org.sagebionetworks.bridge.model.timeseries.TimeSeriesCollection;
-import org.sagebionetworks.bridge.model.timeseries.TimeSeriesPoint;
+import org.sagebionetworks.bridge.model.timeseries.TimeSeriesRow;
+import org.sagebionetworks.bridge.model.timeseries.TimeSeriesTable;
 import org.sagebionetworks.repo.model.DatastoreException;
 import org.sagebionetworks.repo.model.IdList;
 import org.sagebionetworks.repo.model.PaginatedResults;
@@ -31,8 +33,9 @@ import org.sagebionetworks.repo.model.UserInfo;
 import org.sagebionetworks.repo.web.NotFoundException;
 import org.springframework.beans.factory.annotation.Autowired;
 
+import com.google.common.base.Predicate;
+import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
-import com.google.common.collect.Sets;
 
 public class ParticipantDataManagerImpl implements ParticipantDataManager {
 
@@ -43,6 +46,38 @@ public class ParticipantDataManagerImpl implements ParticipantDataManager {
 		EMPTY_ROW.setData(Collections.<String, ParticipantDataValue> emptyMap());
 	}
 
+	private static class ColumnComparator implements Comparator<ParticipantDataRow> {
+		private final String columnName;
+
+		public ColumnComparator(String columnName) {
+			this.columnName = columnName;
+		}
+
+		@SuppressWarnings("unchecked")
+		@Override
+		public int compare(ParticipantDataRow o1, ParticipantDataRow o2) {
+			return ValueTranslator.getComparable(o1.getData().get(columnName)).compareTo(
+					ValueTranslator.getComparable(o2.getData().get(columnName)));
+		}
+	}
+
+	private static abstract class EventComparator implements Comparator<ParticipantDataRow> {
+		private final String eventColumnName;
+
+		public EventComparator(String eventColumnName) {
+			this.eventColumnName = eventColumnName;
+		}
+
+		@Override
+		public int compare(ParticipantDataRow o1, ParticipantDataRow o2) {
+			ParticipantDataEventValue eventValue1 = (ParticipantDataEventValue) o1.getData().get(eventColumnName);
+			ParticipantDataEventValue eventValue2 = (ParticipantDataEventValue) o2.getData().get(eventColumnName);
+			return compare(eventValue1,eventValue2);
+		}
+
+		abstract public int compare(ParticipantDataEventValue e1, ParticipantDataEventValue e2);
+	}
+
 	@Autowired
 	private ParticipantDataDAO participantDataDAO;
 	@Autowired
@@ -51,6 +86,18 @@ public class ParticipantDataManagerImpl implements ParticipantDataManager {
 	private ParticipantDataStatusDAO participantDataStatusDAO;
 	@Autowired
 	private ParticipantDataDescriptionManager participantDataDescriptionManager;
+
+	public ParticipantDataManagerImpl() {
+	}
+
+	// for unit testing only
+	ParticipantDataManagerImpl(ParticipantDataDAO participantDataDAO, ParticipantDataIdMappingManager participantDataMappingManager,
+			ParticipantDataStatusDAO participantDataStatusDAO, ParticipantDataDescriptionManager participantDataDescriptionManager) {
+		this.participantDataDAO = participantDataDAO;
+		this.participantDataMappingManager = participantDataMappingManager;
+		this.participantDataStatusDAO = participantDataStatusDAO;
+		this.participantDataDescriptionManager = participantDataDescriptionManager;
+	}
 
 	@Override
 	public List<ParticipantDataRow> appendData(UserInfo userInfo, ParticipantDataId participantDataId, String participantDataDescriptorId,
@@ -103,12 +150,59 @@ public class ParticipantDataManagerImpl implements ParticipantDataManager {
 	}
 
 	@Override
+	public List<ParticipantDataRow> getHistoryData(UserInfo userInfo, String participantDataDescriptorId, final boolean onlyNotEnded,
+			final Date after, final Date before, SortType sortType) throws DatastoreException, NotFoundException, IOException,
+			GeneralSecurityException {
+		ParticipantDataId participantDataId = getParticipantDataId(userInfo, participantDataDescriptorId);
+		if (participantDataId == null) {
+			// User has never created data for this ParticipantData type, which is not an error, so return
+			// empty result.
+			return Collections.<ParticipantDataRow> emptyList();
+		}
+		final ParticipantDataDescriptor participantDataDescriptor = participantDataDescriptionManager.getParticipantDataDescriptor(userInfo,
+				participantDataDescriptorId);
+		if (participantDataDescriptor.getEventColumnName() == null) {
+			throw new NotFoundException("Data descriptor does not define event column");
+		}
+		List<ParticipantDataColumnDescriptor> columns = participantDataDescriptionManager.getColumns(participantDataDescriptorId);
+		List<ParticipantDataRow> rowList = participantDataDAO.get(participantDataId, participantDataDescriptorId, columns);
+
+		// first filter out non-ended, and before and after if they apply
+		rowList = Lists.newArrayList(Iterables.filter(rowList, new Predicate<ParticipantDataRow>() {
+			@Override
+			public boolean apply(ParticipantDataRow row) {
+				ParticipantDataEventValue event = (ParticipantDataEventValue) row.getData().get(
+						participantDataDescriptor.getEventColumnName());
+				if (onlyNotEnded && event.getEnd() != null) {
+					return false;
+				}
+				if (after != null && event.getStart() < after.getTime()) {
+					return false;
+				}
+				if (before != null && event.getStart() > before.getTime()) {
+					return false;
+				}
+				return true;
+			}
+		}));
+
+		switch (sortType) {
+		case SORT_BY_DATE:
+			rowList = sortRowsByDate(rowList, participantDataDescriptor.getEventColumnName());
+			break;
+		case SORT_BY_GROUP_AND_DATE:
+			rowList = sortRowsGroupAndDate(rowList, participantDataDescriptor.getEventColumnName());
+			break;
+		}
+		return rowList;
+	}
+
+	@Override
 	public ParticipantDataRow getDataRow(UserInfo userInfo, String participantDataDescriptorId, Long rowId) throws DatastoreException,
 			NotFoundException, IOException, GeneralSecurityException {
 		ParticipantDataId participantDataId = getParticipantDataId(userInfo, participantDataDescriptorId);
 		if (participantDataId == null) {
-			// User has never created data for this ParticipantData type, which is not an error, so return
-			// empty result. It will have no headers given the way this works.
+			// User has never created data for this ParticipantData type
 			throw new NotFoundException("No participant data with id " + participantDataDescriptorId);
 		}
 		List<ParticipantDataColumnDescriptor> columns = participantDataDescriptionManager.getColumns(participantDataDescriptorId);
@@ -161,7 +255,7 @@ public class ParticipantDataManagerImpl implements ParticipantDataManager {
 	}
 
 	@Override
-	public TimeSeriesCollection getTimeSeries(UserInfo userInfo, String participantDataDescriptorId, List<String> columnNames)
+	public TimeSeriesTable getTimeSeries(UserInfo userInfo, String participantDataDescriptorId, List<String> columnNamesRequested)
 			throws DatastoreException, NotFoundException, IOException, GeneralSecurityException {
 		List<ParticipantDataId> participantDataIds = participantDataMappingManager.mapSynapseUserToParticipantIds(userInfo);
 		ParticipantDataId participantDataId = participantDataDAO.findParticipantForParticipantData(participantDataIds,
@@ -176,55 +270,206 @@ public class ParticipantDataManagerImpl implements ParticipantDataManager {
 		List<ParticipantDataColumnDescriptor> columns = participantDataDescriptionManager.getColumns(participantDataDescriptorId);
 		List<ParticipantDataRow> data = participantDataDAO.get(participantDataId, participantDataDescriptorId, columns);
 
-		String datetimeColumnName = dataDescriptor.getDatetimeStartColumnName();
-		if (StringUtils.isEmpty(datetimeColumnName)) {
+		TimeSeriesTable timeSeriesCollection = new TimeSeriesTable();
+		timeSeriesCollection.setName(dataDescriptor.getName());
+
+		List<String> columnNames;
+		List<TimeSeriesRow> rows = Collections.emptyList();
+		List<ParticipantDataEventValue> events = Collections.emptyList();
+
+		Long firstDate = new Date().getTime();
+		Long lastDate = null;
+
+		if (dataDescriptor.getEventColumnName() != null) {
+			events = Lists.newArrayListWithExpectedSize(data.size());
+			final String eventColumnName = dataDescriptor.getEventColumnName();
+
+			columnNames = createColumns(columnNamesRequested, columns, eventColumnName, timeSeriesCollection);
+
+			data = sortRowsGroupAndMerge(data, eventColumnName);
+
+			for (ParticipantDataRow row : data) {
+				events.add((ParticipantDataEventValue) row.getData().get(eventColumnName));
+			}
+			if (!events.isEmpty()) {
+				firstDate = events.get(0).getStart();
+			}
+		} else if (dataDescriptor.getDatetimeStartColumnName() != null) {
+			rows = Lists.newArrayListWithExpectedSize(data.size());
+			String datetimeColumnName = dataDescriptor.getDatetimeStartColumnName();
+
+			columnNames = createColumns(columnNamesRequested, columns, datetimeColumnName, timeSeriesCollection);
+
+			// filter out data with null date time
+			for (Iterator<ParticipantDataRow> iterator = data.iterator(); iterator.hasNext();) {
+				ParticipantDataRow row = (ParticipantDataRow) iterator.next();
+				if (row.getData().get(datetimeColumnName) == null) {
+					iterator.remove();
+				}
+			}
+
+			// sort timeseries by date always
+			Collections.sort(data, new ColumnComparator(datetimeColumnName));
+
+			if (!data.isEmpty()) {
+				firstDate = ValueTranslator.toLong(data.get(0).getData().get(datetimeColumnName));
+			}
+
+			// and make into time series
+			for (ParticipantDataRow row : data) {
+				TimeSeriesRow timeSeriesRow = new TimeSeriesRow();
+				timeSeriesRow.setValues(Lists.<String> newArrayListWithCapacity(columnNames.size()));
+				for (String columnName : columnNames) {
+					String value = null;
+					ParticipantDataValue dataValue = row.getData().get(columnName);
+					if (dataValue != null) {
+						if (dataValue instanceof ParticipantDataDatetimeValue) {
+							value = ((ParticipantDataDatetimeValue) dataValue).getValue().toString();
+						} else {
+							value = ValueTranslator.toDouble(dataValue).toString();
+						}
+					}
+					timeSeriesRow.getValues().add(value);
+				}
+				rows.add(timeSeriesRow);
+			}
+		} else {
 			throw new IllegalArgumentException("Data descriptor does not define a date column for timeseries");
 		}
 
-		TimeSeriesCollection timeSeriesCollection = new TimeSeriesCollection();
-		timeSeriesCollection.setSeries(Lists.<TimeSeries> newArrayListWithCapacity(columns.size()));
-
-		Set<String> columnNameSet = columnNames == null ? null : Sets.newHashSet(columnNames);
-		for (ParticipantDataColumnDescriptor column : columns) {
-			if (columnNameSet == null || columnNameSet.contains(column.getName())) {
-				if (!column.getName().equals(datetimeColumnName)) {
-					TimeSeries timeSeries = createTimeSeries(data, datetimeColumnName, column.getName());
-					if (!timeSeries.getSeries().isEmpty()) {
-						timeSeriesCollection.getSeries().add(timeSeries);
-					}
-				}
-			}
-		}
+		timeSeriesCollection.setEvents(events);
+		timeSeriesCollection.setRows(rows);
+		timeSeriesCollection.setFirstDate(firstDate);
+		timeSeriesCollection.setLastDate(lastDate);
 		return timeSeriesCollection;
 	}
 
-	@Override
-	public TimeSeriesCollection getTimeSeries(UserInfo userInfo, String participantDataDescriptorNameOrId, String columnName, String alignBy)
-			throws DatastoreException, NotFoundException, IOException, GeneralSecurityException {
-		return null;
-	}
-
-	private TimeSeries createTimeSeries(List<ParticipantDataRow> data, String datetimeColumnName, String columnName) {
-		TimeSeries timeSeries = new TimeSeries();
-		timeSeries.setName(columnName);
-		timeSeries.setSeries(Lists.<TimeSeriesPoint> newArrayListWithCapacity(data.size()));
-		for (ParticipantDataRow row : data) {
-			ParticipantDataValue value = row.getData().get(columnName);
-			if (value != null) {
-				ParticipantDataValue datetimeRawValue = row.getData().get(datetimeColumnName);
-				if (!(datetimeRawValue instanceof ParticipantDataDatetimeValue)) {
-					throw new IllegalArgumentException("Date column for timeseries does not contain date type: "
-							+ datetimeRawValue.getClass().getName());
-				}
-				ParticipantDataDatetimeValue datetimeValue = (ParticipantDataDatetimeValue) datetimeRawValue;
-				if (datetimeValue != null) {
-					TimeSeriesPoint point = new TimeSeriesPoint();
-					point.setDate(datetimeValue.getValue());
-					point.setValue(ValueTranslator.toDouble(value));
-					timeSeries.getSeries().add(point);
+	private List<String> createColumns(List<String> columnNamesRequested, List<ParticipantDataColumnDescriptor> columns,
+			String firstColumnName, TimeSeriesTable timeSeriesCollection) {
+		List<String> columnNames;
+		int datetimeColumnIndex;
+		if (columnNamesRequested != null && columnNamesRequested.size() > 0) {
+			columnNames = Lists.newArrayListWithCapacity(columnNamesRequested.size() + 1);
+			datetimeColumnIndex = 0;
+			columnNames.add(firstColumnName);
+			columnNames.addAll(columnNamesRequested);
+		} else {
+			columnNames = Lists.newArrayListWithCapacity(columns.size());
+			datetimeColumnIndex = 0;
+			columnNames.add(firstColumnName); // datetime column
+			for (ParticipantDataColumnDescriptor column : columns) {
+				if (!column.getName().equals(firstColumnName) && ValueTranslator.canBeDouble(column.getColumnType())) {
+					columnNames.add(column.getName());
 				}
 			}
 		}
-		return timeSeries;
+		// ::TODO:: remove this
+		for (Iterator<String> iterator = columnNames.iterator(); iterator.hasNext();) {
+			String column = iterator.next();
+			if (column.indexOf('_') >= 0 && column.indexOf("collected") < 0) {
+				iterator.remove();
+			}
+		}
+
+		timeSeriesCollection.setDateIndex((long) datetimeColumnIndex);
+		timeSeriesCollection.setColumns(columnNames);
+		return columnNames;
+	}
+
+	private List<ParticipantDataRow> sortRowsByDate(List<ParticipantDataRow> rowList, String eventColumnName) {
+		Collections.sort(rowList, new EventComparator(eventColumnName) {
+			@Override
+			public int compare(ParticipantDataEventValue e1, ParticipantDataEventValue e2) {
+				return e1.getStart().compareTo(e2.getStart());
+			}
+		});
+		return rowList;
+	}
+
+	private List<ParticipantDataRow> sortRowsGroupAndDate(List<ParticipantDataRow> rowList, final String eventColumnName) {
+		List<List<ParticipantDataRow>> groups = presortRowsGroupAndDate(rowList, eventColumnName);
+		List<ParticipantDataRow> result = Lists.newArrayListWithCapacity(rowList.size());
+		for (List<ParticipantDataRow> group : groups) {
+			for (ParticipantDataRow row : group) {
+				result.add(row);
+			}
+		}
+		return result;
+	}
+
+	private List<ParticipantDataRow> sortRowsGroupAndMerge(List<ParticipantDataRow> rowList, final String eventColumnName) {
+		List<List<ParticipantDataRow>> groups = presortRowsGroupAndDate(rowList, eventColumnName);
+		List<ParticipantDataRow> result = Lists.newArrayListWithCapacity(groups.size());
+		for (List<ParticipantDataRow> group : groups) {
+			if (group.size() > 1) {
+				// the first event has the first start date, but we don't know about the end date, so find the latest
+				// end date (null is not-yet-closed and therefore always the latest)
+				ParticipantDataEventValue event = (ParticipantDataEventValue) group.get(0).getData().get(eventColumnName);
+				for (int i = 1; i < group.size(); i++) {
+					ParticipantDataEventValue event2 = (ParticipantDataEventValue) group.get(i).getData().get(eventColumnName);
+					if (event.getEnd() != null) {
+						if (event2.getEnd() == null) {
+							event.setEnd(null);
+						} else {
+							event.setEnd(Math.max(event.getEnd().longValue(), event2.getEnd().longValue()));
+						}
+					}
+				}
+			}
+			result.add(group.get(0));
+		}
+		return result;
+	}
+
+	private List<List<ParticipantDataRow>> presortRowsGroupAndDate(List<ParticipantDataRow> rowList, final String eventColumnName) {
+		// sort timeseries by grouping first and date second
+		Collections.sort(rowList, new EventComparator(eventColumnName) {
+			@Override
+			public int compare(ParticipantDataEventValue e1, ParticipantDataEventValue e2) {
+				String grouping1 = e1.getGrouping();
+				String grouping2 = e2.getGrouping();
+				if (grouping1 == null) {
+					return grouping2 == null ? 0 : 1;
+				}
+				if (grouping2 == null) {
+					return -1;
+				}
+				int comp = grouping1.compareTo(grouping2);
+				if (comp != 0) {
+					return comp;
+				}
+				return e1.getStart().compareTo(e2.getStart());
+			}
+		});
+
+		// make a list of groups
+		String lastGroup = null;
+		int lastGroupStart = -1;
+		List<List<ParticipantDataRow>> groups = Lists.newArrayList();
+		for (int i = 0; i < rowList.size(); i++) {
+			ParticipantDataEventValue event = (ParticipantDataEventValue) rowList.get(i).getData().get(eventColumnName);
+			if (lastGroup == null || event.getGrouping() == null || !lastGroup.equals(event.getGrouping())) {
+				if (lastGroupStart >= 0) {
+					groups.add(rowList.subList(lastGroupStart, i));
+				}
+				lastGroup = event.getGrouping();
+				lastGroupStart = i;
+			}
+		}
+		if (lastGroupStart >= 0) {
+			groups.add(rowList.subList(lastGroupStart, rowList.size()));
+		}
+
+		// sort by event start
+		Collections.sort(groups, new Comparator<List<ParticipantDataRow>>() {
+			@Override
+			public int compare(List<ParticipantDataRow> group1, List<ParticipantDataRow> group2) {
+				ParticipantDataEventValue event1 = (ParticipantDataEventValue) group1.get(0).getData().get(eventColumnName);
+				ParticipantDataEventValue event2 = (ParticipantDataEventValue) group2.get(0).getData().get(eventColumnName);
+				return event1.getStart().compareTo(event2.getStart());
+			}
+		});
+
+		return groups;
 	}
 }

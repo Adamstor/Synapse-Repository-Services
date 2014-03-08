@@ -21,7 +21,7 @@ import org.sagebionetworks.client.SynapseAdminClientImpl;
 import org.sagebionetworks.client.SynapseClient;
 import org.sagebionetworks.client.SynapseClientImpl;
 import org.sagebionetworks.client.exceptions.SynapseException;
-import org.sagebionetworks.client.exceptions.SynapseServiceException;
+import org.sagebionetworks.client.exceptions.SynapseClientException;
 import org.sagebionetworks.repo.model.EntityHeader;
 import org.sagebionetworks.repo.model.FileEntity;
 import org.sagebionetworks.repo.model.Project;
@@ -79,7 +79,7 @@ public class IT054FileEntityTest {
 	@After
 	public void after() throws Exception {
 		if(project != null){
-			synapse.deleteAndPurgeEntity(project);
+			synapse.deleteEntity(project, true);
 		}
 		if(fileHandle != null){
 			try {
@@ -97,7 +97,7 @@ public class IT054FileEntityTest {
 	public static void afterClass() throws Exception {
 		try {
 			adminSynapse.deleteUser(userToDelete);
-		} catch (SynapseServiceException e) { }
+		} catch (SynapseClientException e) { }
 	}
 	
 	@Test

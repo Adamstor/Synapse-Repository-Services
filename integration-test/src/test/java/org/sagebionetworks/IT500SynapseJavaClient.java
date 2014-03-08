@@ -43,14 +43,16 @@ import org.sagebionetworks.client.exceptions.SynapseBadRequestException;
 import org.sagebionetworks.client.exceptions.SynapseException;
 import org.sagebionetworks.client.exceptions.SynapseForbiddenException;
 import org.sagebionetworks.client.exceptions.SynapseNotFoundException;
-import org.sagebionetworks.client.exceptions.SynapseServiceException;
+import org.sagebionetworks.client.exceptions.SynapseClientException;
 import org.sagebionetworks.repo.model.ACCESS_TYPE;
 import org.sagebionetworks.repo.model.AccessControlList;
 import org.sagebionetworks.repo.model.AccessRequirement;
 import org.sagebionetworks.repo.model.Annotations;
 import org.sagebionetworks.repo.model.AuthorizationConstants;
+import org.sagebionetworks.repo.model.AuthorizationConstants.BOOTSTRAP_TEAM;
 import org.sagebionetworks.repo.model.BatchResults;
 import org.sagebionetworks.repo.model.Data;
+import org.sagebionetworks.repo.model.DomainType;
 import org.sagebionetworks.repo.model.Entity;
 import org.sagebionetworks.repo.model.EntityBundle;
 import org.sagebionetworks.repo.model.EntityBundleCreate;
@@ -94,6 +96,8 @@ import org.sagebionetworks.schema.adapter.JSONObjectAdapterException;
 import org.sagebionetworks.utils.DefaultHttpClientSingleton;
 import org.sagebionetworks.utils.HttpClientHelper;
 
+import com.google.common.collect.Sets;
+
 /**
  * Run this integration test as a sanity check to ensure our Synapse Java Client
  * is working
@@ -117,6 +121,26 @@ public class IT500SynapseJavaClient {
 	private List<String> teamsToDelete;
 	private Project project;
 	private Study dataset;
+	
+	private static Set<String> bootstrappedTeams = Sets.newHashSet();
+	static {
+		for (int i=0; i < BOOTSTRAP_TEAM.values().length; i++) {
+			bootstrappedTeams.add(BOOTSTRAP_TEAM.values()[i].getId());
+		}
+	}
+	
+	private long getBootstrapCountPlus(long number) {
+		return bootstrappedTeams.size() + number;
+	}
+	
+	private Team getTestTeamFromResults(PaginatedResults<Team> results) {
+		for (Team team : results.getResults()) {
+			if (!bootstrappedTeams.contains(team.getId())) {
+				return team;
+			}
+		}
+		return null;
+	}
 	
 	@BeforeClass
 	public static void beforeClass() throws Exception {
@@ -151,19 +175,19 @@ public class IT500SynapseJavaClient {
 		
 		toDelete.add(project.getId());
 		toDelete.add(dataset.getId());
-		
-		
-		// there shouldn't be any Teams floating around in the system
-		// the Team tests assume there are no Teams to start.  So before
-		// running the tests, we clean up all the teams
+
+		// The only teams we leave in the system are the bootstrap teams. The method
+		// getBootstrapTeamsPlus(num) returns the right count for assertions.
 		long numTeams = 0L;
 		do {
 			PaginatedResults<Team> teams = synapseOne.getTeams(null, 10, 0);
 			numTeams = teams.getTotalNumberOfResults();
 			for (Team team : teams.getResults()) {
-				synapseOne.deleteTeam(team.getId());
+				if (!bootstrappedTeams.contains(team.getId())) {
+					synapseOne.deleteTeam(team.getId());
+				}
 			}
-		} while (numTeams>0);
+		} while (numTeams > getBootstrapCountPlus(0));		
 	}
 	
 	@After
@@ -184,7 +208,7 @@ public class IT500SynapseJavaClient {
 			try {
 				adminSynapse.deleteFileHandle(id);
 			} catch (SynapseNotFoundException e) {
-			} catch (SynapseServiceException e) { }
+			} catch (SynapseClientException e) { }
 		}
 		
 		for (String id : teamsToDelete) {
@@ -198,10 +222,10 @@ public class IT500SynapseJavaClient {
 	public static void afterClass() throws Exception {
 		try {
 			adminSynapse.deleteUser(user1ToDelete);
-		} catch (SynapseServiceException e) { }
+		} catch (SynapseClientException e) { }
 		try {
 			adminSynapse.deleteUser(user2ToDelete);
-		} catch (SynapseServiceException e) { }
+		} catch (SynapseClientException e) { }
 	}
 	
 	@Test
@@ -757,8 +781,8 @@ public class IT500SynapseJavaClient {
 		r = adminSynapse.createAccessRequirement(r);
 		accessRequirementsToDelete.add(r.getId());
 		
-		// check that owner can download
-		assertTrue(synapseOne.canAccess(layer.getId(), ACCESS_TYPE.DOWNLOAD));
+		// check that owner can't download (since it's not a FileEntity)
+		assertFalse(synapseOne.canAccess(layer.getId(), ACCESS_TYPE.DOWNLOAD));
 
 		UserProfile otherProfile = synapseOne.getMyProfile();
 		assertNotNull(otherProfile);
@@ -807,6 +831,18 @@ public class IT500SynapseJavaClient {
 		String termsOfUse = synapseOne.getSynapseTermsOfUse();
 		assertNotNull(termsOfUse);
 		assertTrue(termsOfUse.length()>100);
+	}
+	
+	@Test
+	public void testRetrieveBridgeTOU() throws Exception {
+		String synapseTermsOfUse = synapseOne.getTermsOfUse(DomainType.BRIDGE);
+		assertNotNull(synapseTermsOfUse);
+		assertTrue(synapseTermsOfUse.length()>100);
+
+		String bridgeTermsOfUse = synapseOne.getTermsOfUse(DomainType.SYNAPSE);
+		assertNotNull(bridgeTermsOfUse);
+		assertTrue(bridgeTermsOfUse.length()>100);
+		assertFalse(bridgeTermsOfUse.equals(synapseTermsOfUse));
 	}
 	
 	/**
@@ -1195,12 +1231,12 @@ public class IT500SynapseJavaClient {
 		URL url = synapseOne.getTeamIcon(updatedTeam.getId(), false);
 		assertNotNull(url);
 		// query for all teams
-		PaginatedResults<Team> teams = synapseOne.getTeams(null, 1, 0);
-		assertEquals(1L, teams.getTotalNumberOfResults());
-		assertEquals(updatedTeam, teams.getResults().get(0));
+		PaginatedResults<Team> teams = synapseOne.getTeams(null, getBootstrapCountPlus(1L), 0);
+		assertEquals(getBootstrapCountPlus(1L), teams.getTotalNumberOfResults());
+		assertEquals(updatedTeam, getTestTeamFromResults(teams));
 		// make sure pagination works
 		teams = synapseOne.getTeams(null, 10, 1);
-		assertEquals(0L, teams.getResults().size());
+		assertEquals(getBootstrapCountPlus(0L), teams.getResults().size());
 		
 		// query for all teams, based on name fragment
 		// need to update cache.  the service to trigger an update
@@ -1208,7 +1244,7 @@ public class IT500SynapseJavaClient {
 		adminSynapse.updateTeamSearchCache();
 		teams = synapseOne.getTeams(name.substring(0, 3),1, 0);
 		assertEquals(1L, teams.getTotalNumberOfResults());
-		assertEquals(updatedTeam, teams.getResults().get(0));
+		assertEquals(updatedTeam, getTestTeamFromResults(teams));
 		// again, make sure pagination works
 		teams = synapseOne.getTeams(name.substring(0, 3), 10, 1);
 		assertEquals(0L, teams.getResults().size());

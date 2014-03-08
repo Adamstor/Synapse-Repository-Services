@@ -16,7 +16,6 @@ import java.util.List;
 import org.junit.Before;
 import org.junit.Test;
 import org.mockito.Mockito;
-import org.sagebionetworks.evaluation.dao.EvaluationDAO;
 import org.sagebionetworks.evaluation.model.Evaluation;
 import org.sagebionetworks.repo.manager.trash.EntityInTrashCanException;
 import org.sagebionetworks.repo.model.ACCESS_TYPE;
@@ -40,6 +39,7 @@ import org.sagebionetworks.repo.model.TermsOfUseAccessRequirement;
 import org.sagebionetworks.repo.model.UserGroupDAO;
 import org.sagebionetworks.repo.model.UserInfo;
 import org.sagebionetworks.repo.model.dao.FileHandleDao;
+import org.sagebionetworks.repo.model.evaluation.EvaluationDAO;
 import org.sagebionetworks.repo.model.provenance.Activity;
 import org.sagebionetworks.repo.web.NotFoundException;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -355,24 +355,58 @@ public class AuthorizationManagerImplUnitTest {
 		assertFalse(authorizationManager.canAccess(userInfo, teamId, ObjectType.TEAM, accessType));
 	}
 	
+	private static void addEntityHeaderTo(String id, Collection<EntityHeader>c) {
+		EntityHeader h = new EntityHeader(); 
+		h.setId(id); 
+		c.add(h);
+	}
+	
 	@Test
 	public void testCanMoveEntity() throws Exception {
-		String parentId = "syn12345";
 		// mock nodeDao
+		String parentId = "syn12345";
+		List<String> ancestorIds = new ArrayList<String>();
+		ancestorIds.add(parentId);
+		ancestorIds.add("syn999");
 		List<EntityHeader> parentAncestors = new ArrayList<EntityHeader>();
-		List<String> ancestorIds = new ArrayList<String>(); // excluding self
+		for (String id: ancestorIds) {
+			addEntityHeaderTo(id, parentAncestors);
+		}
 		when(mockNodeDao.getEntityPath(parentId)).thenReturn(parentAncestors);
+		
+		String newParentId = "syn6789";
+		List<String> newAncestorIds = new ArrayList<String>();
+		newAncestorIds.add(newParentId);
+		newAncestorIds.add("syn888");
+		List<EntityHeader> newParentAncestors = new ArrayList<EntityHeader>();
+		for (String id: newAncestorIds) {
+			addEntityHeaderTo(id, newParentAncestors);
+		}
+		when(mockNodeDao.getEntityPath(newParentId)).thenReturn(newParentAncestors);
+		
 		// mock accessRequirementDAO
 		List<AccessRequirement> ars = new ArrayList<AccessRequirement>();
+		AccessRequirement ar = new TermsOfUseAccessRequirement();
+		ars.add(ar);
 		when(mockAccessRequirementDAO.getForSubject(ancestorIds, RestrictableObjectType.ENTITY)).thenReturn(ars);
-		// since 'ars' is empty, will return true
-		assertTrue(authorizationManager.canMoveEntity(userInfo, parentId));
+		when(mockAccessRequirementDAO.getForSubject(newAncestorIds, RestrictableObjectType.ENTITY)).thenReturn(ars);
+		
+		// since 'ars' list doesn't change, will return true
+		assertTrue(authorizationManager.canUserMoveRestrictedEntity(userInfo, parentId, newParentId));
 		verify(mockNodeDao).getEntityPath(parentId);
 		verify(mockAccessRequirementDAO).getForSubject(ancestorIds, RestrictableObjectType.ENTITY);
-		// if 'ars' is not empty, will return false
-		ars.add(new TermsOfUseAccessRequirement());
-		assertFalse(authorizationManager.canMoveEntity(userInfo, parentId));
+		
+		// making MORE restrictive is OK
+		List<AccessRequirement> mt = new ArrayList<AccessRequirement>(); // i.e, an empty list
+		when(mockAccessRequirementDAO.getForSubject(ancestorIds, RestrictableObjectType.ENTITY)).thenReturn(mt);
+		assertTrue(authorizationManager.canUserMoveRestrictedEntity(userInfo, parentId, newParentId));
+
+		// but making less restrictive is NOT OK
+		when(mockAccessRequirementDAO.getForSubject(ancestorIds, RestrictableObjectType.ENTITY)).thenReturn(ars);
+		when(mockAccessRequirementDAO.getForSubject(newAncestorIds, RestrictableObjectType.ENTITY)).thenReturn(mt);
+		assertFalse(authorizationManager.canUserMoveRestrictedEntity(userInfo, parentId, newParentId));
+		
 		// but if the user is an admin, will be true
-		assertTrue(authorizationManager.canMoveEntity(adminUser, parentId));
+		assertTrue(authorizationManager.canUserMoveRestrictedEntity(adminUser, parentId, newParentId));
 	}
 }
